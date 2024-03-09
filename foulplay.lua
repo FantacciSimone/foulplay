@@ -117,7 +117,7 @@ local stopped = 1
 local pset_load_mode = false
 local current_pset = 0
 
-local midi_note_root = 60
+local note_root = 60
 local scale_notes = {}
 local scale_names = {}
 
@@ -148,6 +148,11 @@ for i = 1, 8 do
   note_off_queue[i] = 0
 end
 
+local track_trig = {}
+for i = 1, 8 do
+  track_trig[i] = 0
+end
+
 -- added for grid support - junklight
 local current_mem_cell = 1
 local current_mem_cell_x = 4
@@ -156,6 +161,8 @@ local copy_mode = false
 local blink = false
 local copy_source_x = -1
 local copy_source_y = -1
+
+
 
 
 function simplecopy(obj)
@@ -181,7 +188,11 @@ for j = 1,25 do
       trig_logic = 0,
       logic_target = track_edit,
       rotation = 0,
-      mute = 0
+      mute = 0,
+      root = 1,
+      root_x = 1,
+      root_y = 1,
+      last_note = note_root
   }
   end
 end
@@ -196,6 +207,10 @@ local function cellfromgrid( x , y )
   return (((y - 1) * 5) + (x -4)) + 1
 end
 
+local function notefromgrid( i, x , y )
+    return (((y - 2) * 6) + (x -10)) + 1
+  --return scale_notes[params:get(i.."_midi_scale")][(((y - 2) * 6) + (x -10)) + 1]             HERE add scale offset
+end
 
 local function rotate_pattern(t, rot, n, r)
   -- rotate_pattern comes to us via okyeron and stackexchange
@@ -219,18 +234,73 @@ local function reer(i)
   end
 end
 
-local function send_midi_note_on(i,p)
-  if params:get(i .. "_send_midi") == 2 then
 
-    if params:get(i.."_use_scale") == 2 then
+local function send_engine_trig(i)
+    track_trig[i] = 1
+    engine.trig(i-1)
+end
+
+local function send_crow(i,p)
+	if params:get(i .. "_send_crow") > 1 then
+		track_trig[i] = 2
+		local _note_playing
+		if params:get(i.."_crow_use_scale") == 2 then
+            if params:get(i.."_crow_rnd_scale_note") == 2 then 
+                p = math.random(p)
+            end
+            _note_playing = scale_notes[params:get(i.."_crow_scale")][p] - note_root + gettrack(current_mem_cell,i).root - 1 + params:get(i.."_crow_note") - 60
+    		--print("note on crow | scale | track:"..i.." | step:"..p.." | note:".._note_playing.." ["..MusicUtil.note_num_to_name(_note_playing, true).."]")
+        else
+    		_note_playing = params:get(i.."_crow_note") - 60
+    		--print("note on crow | track:"..i.." | step:"..p.." | note:".._note_playing.." ["..MusicUtil.note_num_to_name(_note_playing, true).."]")
+        end
+		
+		if params:get(i .. "_send_crow") == 2 then
+		    crow.output[1].volts=(_note_playing-60)/12
+            crow.output[2].execute()    
+		elseif params:get(i .. "_send_crow") == 3 then
+		    crow.output[3].volts=(_note_playing-60)/12
+            crow.output[4].execute()    
+		elseif params:get(i .. "_send_crow") >= 4 then
+		    crow.output[params:get(i .. "_send_crow")-3]()
+		end
+	end
+end
+
+local function send_jf_note(i,p)
+  if params:get(i .. "_send_jf") == 2 then
+	track_trig[i] = 3
+    if params:get(i.."_midi_use_scale") == 2 then
         if params:get(i.."_rnd_scale_note") == 2 then 
             p = math.random(p)
         end
-        _note_playing = scale_notes[params:get(i.."_midi_scale")][p] - midi_note_root + params:get(i.."_midi_note")
+        _note_playing = scale_notes[params:get(i.."_midi_scale")][p] - note_root + gettrack(current_mem_cell,i).root - 1 + params:get(i.."_midi_note") - 60
+		crow.ii.jf.play_note(_note_playing / 12, 5) -- TODO 5v -> 9v or add param?
+		--print("note on jf | scale | track:"..i.." | step:"..p.." | note:".._note_playing.." ["..MusicUtil.note_num_to_name(_note_playing, true).."]")
+    else
+		_note_playing = params:get(i.."_midi_note") - 60
+		crow.ii.jf.play_note(_note_playing / 12, 5)
+		--print("note on jf | track:"..i.." | step:"..p.." | note:".._note_playing.." ["..MusicUtil.note_num_to_name(_note_playing, true).."]")
+    end
+  end
+end
+
+local function send_midi_note_on(i,p)
+  
+  if params:get(i .. "_midi_send") == 2 then
+    track_trig[i] = 4
+    if params:get(i.."_midi_use_scale") == 2 then
+        if params:get(i.."_rnd_scale_note") == 2 then 
+            p = math.random(p)
+        end
+        _note_playing = scale_notes[params:get(i.."_midi_scale")][p] - note_root + gettrack(current_mem_cell,i).root - 1 + params:get(i.."_midi_note")
         midi_device[params:get(i.."_midi_target")]:note_on(_note_playing, 100, params:get(i.."_midi_chan"))
+        gettrack(current_mem_cell,i).last_note=_note_playing
         --print("note on | track:"..i.." | step:"..p.." | scale "..MusicUtil.SCALES[params:get(i.."_midi_scale")].name.." | root:"..params:get(i.."_midi_note").." | note:".._note_playing.." ["..MusicUtil.note_num_to_name(_note_playing, true).."]")
     else 
-        midi_device[params:get(i.."_midi_target")]:note_on(params:get(i.."_midi_note"), 100, params:get(i.."_midi_chan"))
+        _note_playing = params:get(i.."_midi_note") + gettrack(current_mem_cell,i).root - 1
+        midi_device[params:get(i.."_midi_target")]:note_on(_note_playing, 100, params:get(i.."_midi_chan"))
+        gettrack(current_mem_cell,i).last_note=_note_playing
     end
 
     note_off_queue[i] = 1
@@ -250,10 +320,9 @@ local function trig()
     -- no trigger logic
     if t.trig_logic==0 and t.s[t.pos]  then
       if math.random(100) <= t.prob and t.mute == 0 then
-        engine.trig(i-1)
-        if i <= 4 and params:get(i .. "_send_crow") == 2 then
-          crow.output[i]()
-        end
+        send_engine_trig(i)
+		send_crow(i,t.pos)
+		send_jf_note(i,t.pos)
         send_midi_note_on(i,t.pos)
       end
     else
@@ -263,10 +332,9 @@ local function trig()
     if t.trig_logic == 1 then
       if t.s[t.pos] and gettrack(current_mem_cell,t.logic_target).s[gettrack(current_mem_cell,t.logic_target).pos]  then
         if math.random(100) <= t.prob and t.mute == 0 then
-          engine.trig(i-1)
-          if i <= 4 and params:get(i .. "_send_crow") == 2 then
-            crow.output[i]()
-          end
+          send_engine_trig(i)
+		  send_crow(i,t.pos)
+		  send_jf_note(i,t.pos)
           send_midi_note_on(i,t.pos)
         else break end
       else
@@ -276,10 +344,9 @@ local function trig()
     elseif t.trig_logic == 2 then
       if t.s[t.pos] or gettrack(current_mem_cell,t.logic_target).s[gettrack(current_mem_cell,t.logic_target).pos] then
         if math.random(100) <= t.prob and t.mute == 0 then
-          engine.trig(i-1)
-          if i <= 4 and params:get(i .. "_send_crow") == 2 then
-            crow.output[i]()
-          end
+          send_engine_trig(i)
+		  send_crow(i,t.pos)
+		  send_jf_note(i,t.pos)
           send_midi_note_on(i,t.pos)
         else break end
       else
@@ -290,10 +357,9 @@ local function trig()
       if t.s[t.pos] and gettrack(current_mem_cell,t.logic_target).s[gettrack(current_mem_cell,t.logic_target).pos]  then
       elseif t.s[t.pos] then
         if math.random(100) <= t.prob and t.mute == 0 then
-          engine.trig(i-1)
-          if i <= 4 and params:get(i .. "_send_crow") == 2 then
-            crow.output[i]()
-          end
+          send_engine_trig(i)
+		  send_crow(i,t.pos)
+		  send_jf_note(i,t.pos)
           send_midi_note_on(i,t.pos)
         else break end
       else
@@ -303,10 +369,9 @@ local function trig()
     elseif t.trig_logic == 4 then
       if not t.s[t.pos] and math.random(100) <= t.prob then
         if not gettrack(current_mem_cell,t.logic_target).s[gettrack(current_mem_cell,t.logic_target).pos] and t.mute == 0 then
-          engine.trig(i-1)
-          if i <= 4 and params:get(i .. "_send_crow") == 2 then
-            crow.output[i]()
-          end
+          send_engine_trig(i)
+		  send_crow(i,t.pos)
+		  send_jf_note(i,t.pos)
           send_midi_note_on(i,t.pos)
         else break end
       else
@@ -318,10 +383,9 @@ local function trig()
         if not t.s[t.pos] and not gettrack(current_mem_cell,t.logic_target).s[gettrack(current_mem_cell,t.logic_target).pos] then
         elseif t.s[t.pos] and gettrack(current_mem_cell,t.logic_target).s[gettrack(current_mem_cell,t.logic_target).pos] then
         else
-          engine.trig(i-1)
-          if i <= 4 and params:get(i .. "_send_crow") == 2 then
-            crow.output[i]()
-          end
+          send_engine_trig(i)
+		  send_crow(i,t.pos) -- maybe to remove
+		  send_jf_note(i,t.pos) -- maybe to remove
           send_midi_note_on(i,t.pos)
           send_midi_note_off(i)
         end
@@ -345,29 +409,38 @@ function init()
   end
 
   for i = 1, #MusicUtil.SCALES do
-    table.insert(scale_notes, MusicUtil.generate_scale_of_length(midi_note_root, i, 32))
+    table.insert(scale_notes, MusicUtil.generate_scale_of_length(note_root, i, 32))
     table.insert(scale_names, MusicUtil.SCALES[i].name)
   end
 
   screen.line_width(1)
   params:add_separator('tracks')
   for i = 1, 8 do
-    params:add_group("track " .. i, 29)
-    ack.add_channel_params(i)
-    params:add_option(i.."_send_midi", i..": send midi", {"no", "yes"}, 1)
+    params:add_group("track " .. i, 38)
+    
+    params:add_separator('midi')
+    params:add_option(i.."_midi_send", i..": send", {"no", "yes"}, 1)
     params:add_option(i.."_midi_target", i..": device", midi_device_names, 1)
-    params:add_number(i.."_midi_chan", i..": midi chan", 1, 16, 1)
-    params:add_number(i.."_midi_note", i..": midi note", 0, 127, midi_note_root, midi_note_formatter)
-    params:add_option(i.."_use_scale", i..": use scale", {"no", "yes"}, 1)
-    params:add_option(i.."_midi_scale", i..": midi scale", scale_names, 1)
-    params:add_option(i.."_rnd_scale_note", i..": randomize scale note", {"no", "yes"}, 1)
+    params:add_number(i.."_midi_chan", i..": channel", 1, 16, 1)
+    params:add_number(i.."_midi_note", i..": note", 0, 127, note_root, midi_note_formatter)
+    params:add_option(i.."_midi_use_scale", i..": use scale", {"no", "yes"}, 1)
+    params:add_option(i.."_midi_scale", i..": scale", scale_names, 1)
+    params:add_option(i.."_rnd_scale_note", i..": randomize note", {"no", "yes"}, 1)
+    
+    params:add_separator('crow | jf')
+    params:add_option(i.."_send_jf", i..": send jf", {"no", "yes"}, 1)
+    params:add_option(i.."_send_crow", i ..": send crow", {"no", "1+2", "3+4", "t1", "t2", "t3", "t4"}, 1)
+    
+    params:add_number(i.."_crow_note", i..": note", 0, 127, note_root, midi_note_formatter)
+    params:add_option(i.."_crow_use_scale", i..": use scale", {"no", "yes"}, 1)
+    params:add_option(i.."_crow_scale", i..": scale", scale_names, 1)
+    params:add_option(i.."_crow_rnd_scale_note", i..": randomize note", {"no", "yes"}, 1)
+    
+    params:add_separator('engine')
+    ack.add_channel_params(i)
+    
   end
-  params:add_separator('crow sends')
-  for i = 1, 8 do
-    if i <= 4 then
-      params:add_option(i .. "_send_crow", i .. ": send crow", {"no", "yes"}, 1)
-    end
-  end
+  
   params:add_separator('effects')
   ack.add_effects_params()
   -- load default pset
@@ -396,6 +469,9 @@ function init()
   for i = 1, 4 do
     crow.output[i].action = "pulse(.1, 5, 1)"
   end
+  -- jf pullup
+  crow.ii.pullup(true)
+  crow.ii.jf.mode(1)
 end
 
 
@@ -426,7 +502,7 @@ function key(n,z)
   -- track edit view
   if view==1 then
     if n==3 and z==1 then
-      if params:get(track_edit.."_send_midi") == 1 then
+      if params:get(track_edit.."_midi_send") == 1 then
         page = (page + 1) % 4
       -- there are only 2 pages of midi options
       else page = (page + 1) % 2 end
@@ -486,7 +562,7 @@ function enc(n,d)
   -- track edit view
   elseif view==1  and page==0 then
     -- only show the engine edit options if midi note send is off
-    if params:get(track_edit.."_send_midi") == 1 then
+    if params:get(track_edit.."_midi_send") == 1 then
     -- per track volume control
       if n==1 then
         params:delta(track_edit .. "_vol", d)
@@ -546,6 +622,11 @@ function enc(n,d)
   elseif n==3 then
     gettrack(current_mem_cell,track_edit).n = util.clamp(gettrack(current_mem_cell,track_edit).n+d,1,32)
     gettrack(current_mem_cell,track_edit).k = util.clamp(gettrack(current_mem_cell,track_edit).k,0,gettrack(current_mem_cell,track_edit).n)
+  -- track rotation control
+  elseif n==4 then
+      gettrack(current_mem_cell, track_edit).rotation = util.clamp(gettrack(current_mem_cell, track_edit).rotation + d, 0, 32)
+      gettrack(current_mem_cell,track_edit).s = rotate_pattern( gettrack(current_mem_cell,track_edit).s, gettrack(current_mem_cell, track_edit).rotation )
+      redraw()
   end
   reer(track_edit)
   redraw()
@@ -558,26 +639,41 @@ function redraw()
   
   if view==0 and alt==0 then
     for i=1, 8 do
+      
+      screen.level((i == track_edit) and 15 or 4)
       if gettrack(current_mem_cell, i).mute == 1 then
-       screen.move(17,i*7.70)
+       screen.move(12,i*7.70)
        screen.text_center("m")
       end
-      screen.level((i == track_edit) and 15 or 4)
-      screen.move(8, i*7.70)
+
+      screen.move(4, i*7.70)
       screen.text_center(gettrack(current_mem_cell,i).k)
-      screen.move(25,i*7.70)
+
+      screen.move(25, i*7.70)
+      if gettrack(current_mem_cell,i).s[gettrack(current_mem_cell,i).pos] then
+        screen.text_center(MusicUtil.note_num_to_name(gettrack(current_mem_cell,i).last_note, true))
+      end
+
+      screen.move(38,i*7.70)
       screen.text_center(gettrack(current_mem_cell,i).n)
+      
+      screen.move(119,i*7.70)
+      screen.text_center(MusicUtil.note_num_to_name(note_root + gettrack(current_mem_cell,i).root - 1, true))
+
       for x=1,gettrack(current_mem_cell,i).n do
         screen.level(gettrack(current_mem_cell,i).pos==x and 15 or 2)
-        screen.move(x*3 + 32, i*7.70)
+        screen.move(x*2 + 45, i*7.70)
         if gettrack(current_mem_cell,i).s[x] then
           screen.line_rel(0,-6)
         else
-          screen.line_rel(0,-2)
+          screen.line_rel(0,-1)
         end
         screen.stroke()
       end
+
     end
+
+    
   elseif view==0 and alt==1 then
     screen.level(4)
     screen.move(0, 8 + 11)
@@ -616,7 +712,7 @@ function redraw()
     end
 
   elseif view==1 and page==0 then
-    if params:get(track_edit.."_send_midi") == 1 then
+    if params:get(track_edit.."_midi_send") == 1 then
       screen.move(5, 10)
       screen.level(15)
       screen.text("track : " .. track_edit)
@@ -643,8 +739,9 @@ function redraw()
       screen.level(4)
       screen.text_center("1. midi channel : " .. params:get(track_edit .. "_midi_chan"))
       screen.move(64, 35)
-      screen.text_center("2. midi note : " .. params:get(track_edit .. "_midi_note"))
-      if params:get(track_edit .."_use_scale") == 2 then
+	  _midi_note = params:get(track_edit .. "_midi_note")
+      screen.text_center("2. midi note : " .. _midi_note .." ["..MusicUtil.note_num_to_name(_midi_note, true).."]")
+      if params:get(track_edit .."_midi_use_scale") == 2 then
         screen.move(64, 45)
         screen.text_center("3. midi scale : " .. MusicUtil.SCALES[params:get(track_edit .. "_midi_scale")].name)
       end
@@ -822,6 +919,17 @@ function g.key(x, y, state)
       end
     end
   end
+  
+  -- play cells
+  -- switches on grid down
+  if not copy_mode and not pset_load_mode then
+    if y >= 2 and y <= 7 and x >= 9 and x <= 15 and state == 1 then
+      gettrack(current_mem_cell, track_edit).root = notefromgrid(track_edit,x,y)
+      gettrack(current_mem_cell, track_edit).root_x = x-9
+      gettrack(current_mem_cell, track_edit).root_y = y-1
+    end
+  end
+  
   redraw()
 end
 
@@ -845,10 +953,21 @@ function grid_redraw()
   -- mutes - bright for on, dim for off
   for i = 1,8 do
     if gettrack(current_mem_cell, i).mute == 1 then
+      g:led(2, i, 4)
+    else 
       g:led(2, i, 15)
-    else g:led(2, i, 4)
     end
   end
+  
+  -- trig - bright for on, dim for off
+  for i = 1,8 do
+    g:led(3, i, 2)
+    if track_trig[i] > 1 then
+        g:led(3, i, 10 + track_trig[i])
+        track_trig[i] = 0
+    end
+  end
+  
   -- memory cells
   for x = 4,8 do
     for y = 1,5 do
@@ -889,6 +1008,24 @@ function grid_redraw()
   else
     g:led(8, 8, 3)
   end
+  
+  -- root note cells
+  for x = 10,15 do
+    for y = 2,7 do
+      g:led(x, y, 3)
+    end
+  end
+  -- highlight C root note cells
+  g:led(10, 2, 10)
+  g:led(11, 3, 10)
+  g:led(12, 4, 10)
+  g:led(13, 5, 10)
+  g:led(14, 6, 10)
+  g:led(15, 7, 10)
+
+  -- highlight current track root note cell
+  g:led(gettrack(current_mem_cell, track_edit).root_x+9, gettrack(current_mem_cell, track_edit).root_y+1, 15) 
+
   g:refresh()
 end
 
@@ -896,7 +1033,7 @@ end
 function savestate()
   local file = io.open(_path.data .. "foulplay/foulplay-pattern.data", "w+")
   io.output(file)
-  io.write("v1" .. "\n")
+  io.write("v2" .. "\n")
   for j = 1, 25 do
     for i = 1, 8 do
       io.write(memory_cell[j][i].k .. "\n")
@@ -906,6 +1043,9 @@ function savestate()
       io.write(memory_cell[j][i].logic_target .. "\n")
       io.write(memory_cell[j][i].rotation .. "\n")
       io.write(memory_cell[j][i].mute .. "\n")
+      io.write(memory_cell[j][i].root .. "\n")
+      io.write(memory_cell[j][i].root_x .. "\n")
+      io.write(memory_cell[j][i].root_y .. "\n")
     end
   end
   io.close(file)
@@ -916,7 +1056,7 @@ function loadstate()
   if file then
     print("datafile found")
     io.input(file)
-    if io.read() == "v1" then
+    if io.read() == "v2" then
       for j = 1, 25 do
         for i = 1, 8 do
           memory_cell[j][i].k = tonumber(io.read())
@@ -926,6 +1066,9 @@ function loadstate()
           memory_cell[j][i].logic_target = tonumber(io.read())
           memory_cell[j][i].rotation = tonumber(io.read())
           memory_cell[j][i].mute = tonumber(io.read())
+          memory_cell[j][i].root = tonumber(io.read())
+          memory_cell[j][i].root_x = tonumber(io.read())
+          memory_cell[j][i].root_y = tonumber(io.read())
         end
       end
     else
