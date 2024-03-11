@@ -123,6 +123,8 @@ local scale_names = {}
 
 -- for new clock system
 local clock_id = 0
+local draw_cycle = 0
+local draw_cycle_i = 0
 
 function pulse()
   while true do
@@ -192,6 +194,9 @@ for j = 1,25 do
       root = 1,
       root_x = 1,
       root_y = 1,
+      scale = 1,
+      scale_x = 1,
+      scale_y = 1,
       last_note = note_root
   }
   end
@@ -211,15 +216,27 @@ local function notefromgrid( i, x , y )
     local _pos =  (((y - 2) * 6) + (x - 10))
     local _note =  params:get(i .. "_root_note") + _pos
     --print("NOTE FROM GRID | ".._note)    
-
     if params:get(i.."_use_scale") == 2 then
-        
-        print(_pos +1 .." | "..note_root.." | ".._note)    
-        
+        --print(_pos +1 .." | "..note_root.." | ".._note)    
         _note = params:get(i .. "_root_note") - note_root + scale_notes[params:get(i.."_the_scale")][_pos + 1]
         --print("NOTE FROM GRID SCALED | ".._note)    
     end
     return _note
+end
+
+local function scalefromgrid( i, x , y )
+    draw_cycle = 1
+    draw_cycle_i = i
+    _pos = (((y - 1) * 8) + (x - 9)) + 1
+    if y>1 and y<=8 then
+        if x==16 and y<8 then
+            _pos = _pos - (6*(y-1)) 
+        elseif x>=9 then
+            _pos = _pos - (6*(y-1)) + 6 
+        end
+    end
+    params:set(i.."_the_scale", _pos)
+    return _pos
 end
 
 local function rotate_pattern(t, rot, n, r)
@@ -613,43 +630,57 @@ function redraw()
   screen.clear()
   
   if view==0 and alt==0 then
-    for i=1, 8 do
-      
-      screen.level((i == track_edit) and 15 or 4)
-      if gettrack(current_mem_cell, i).mute == 1 then
-       screen.move(12,i*7.70)
-       screen.text_center("m")
-      end
 
-      screen.move(4, i*7.70)
-      screen.text_center(gettrack(current_mem_cell,i).k)
+    if draw_cycle > 0 then
+      draw_cycle = draw_cycle + 1
+      screen.move(70,3*7.70)
+      screen.text_center("Track #"..draw_cycle_i)
+      screen.move(70,4*7.70)
+      screen.text_center(MusicUtil.SCALES[params:get(track_edit .. "_the_scale")].name)
+    else
 
-      screen.move(25, i*7.70)
-      if gettrack(current_mem_cell,i).s[gettrack(current_mem_cell,i).pos] then
-        screen.text_center(MusicUtil.note_num_to_name(gettrack(current_mem_cell,i).last_note, true))
-      end
-
-      screen.move(38,i*7.70)
-      screen.text_center(gettrack(current_mem_cell,i).n)
-      
-      screen.move(119,i*7.70)
-      screen.text_center(MusicUtil.note_num_to_name(gettrack(current_mem_cell,i).root, true))
-
-      for x=1,gettrack(current_mem_cell,i).n do
-        screen.level(gettrack(current_mem_cell,i).pos==x and 15 or 2)
-        screen.move(x*2 + 45, i*7.70)
-        if gettrack(current_mem_cell,i).s[x] then
-          --l = (1/gettrack(current_mem_cell,i).n)*x*4          scale effect todo?
-          screen.line_rel(0,-6)
-        else
-          screen.line_rel(0,-1)
-        end
-        screen.stroke()
-      end
-
-    end
-
+        for i=1, 8 do
+          
+          screen.level((i == track_edit) and 15 or 4)
+          if gettrack(current_mem_cell, i).mute == 1 then
+           screen.move(12,i*7.70)
+           screen.text_center("m")
+          end
     
+          screen.move(4, i*7.70)
+          screen.text_center(gettrack(current_mem_cell,i).k)
+    
+          screen.move(25, i*7.70)
+          if gettrack(current_mem_cell,i).s[gettrack(current_mem_cell,i).pos] then
+            screen.text_center(MusicUtil.note_num_to_name(gettrack(current_mem_cell,i).last_note, true))
+          end
+    
+          screen.move(38,i*7.70)
+          screen.text_center(gettrack(current_mem_cell,i).n)
+          
+          screen.move(119,i*7.70)
+          screen.text_center(MusicUtil.note_num_to_name(gettrack(current_mem_cell,i).root, true))
+          
+          for x=1,gettrack(current_mem_cell,i).n do
+            screen.level(gettrack(current_mem_cell,i).pos==x and 15 or 2)
+            screen.move(x*2 + 45, i*7.70)
+            if gettrack(current_mem_cell,i).s[x] then
+              --l = (1/gettrack(current_mem_cell,i).n)*x*4          scale effect todo?
+              screen.line_rel(0,-6)
+            else
+              screen.line_rel(0,-1)
+            end
+            screen.stroke()
+          end
+        end
+      
+    end  
+    
+    if draw_cycle == 5 or stopped == 1 then
+        draw_cycle = 0
+        draw_cycle_i = 0
+    end 
+
   elseif view==0 and alt==1 then
     screen.level(4)
     screen.move(0, 8 + 11)
@@ -899,10 +930,17 @@ function g.key(x, y, state)
   -- play cells
   -- switches on grid down
   if not copy_mode and not pset_load_mode then
-    if y >= 2 and y <= 7 and x >= 10 and x <= 15 and state == 1 then
-      gettrack(current_mem_cell, track_edit).root = notefromgrid(track_edit,x,y)
-      gettrack(current_mem_cell, track_edit).root_x = x-9
-      gettrack(current_mem_cell, track_edit).root_y = y-1
+    if y >= 1 and y <= 8 and x >= 9 and x <= 16 and state == 1 then
+    
+        if y >= 2 and y <= 7 and x >= 10 and x <= 15 and state == 1 then
+          gettrack(current_mem_cell, track_edit).root = notefromgrid(track_edit,x,y)
+          gettrack(current_mem_cell, track_edit).root_x = x-9
+          gettrack(current_mem_cell, track_edit).root_y = y-1
+        else
+          gettrack(current_mem_cell, track_edit).scale = scalefromgrid(track_edit,x,y)
+          gettrack(current_mem_cell, track_edit).scale_x = x-8
+          gettrack(current_mem_cell, track_edit).scale_y = y      
+        end
     end
   end
   
@@ -1000,6 +1038,9 @@ function grid_redraw()
   -- highlight current track root note cell
   g:led(gettrack(current_mem_cell, track_edit).root_x+9, gettrack(current_mem_cell, track_edit).root_y+1, 15) 
 
+  -- highlight current track scale cell
+  g:led(gettrack(current_mem_cell, track_edit).scale_x+8, gettrack(current_mem_cell, track_edit).scale_y, 15) 
+
   g:refresh()
 end
 
@@ -1020,6 +1061,9 @@ function savestate()
       io.write(memory_cell[j][i].root .. "\n")
       io.write(memory_cell[j][i].root_x .. "\n")
       io.write(memory_cell[j][i].root_y .. "\n")
+      io.write(memory_cell[j][i].scale .. "\n")
+      io.write(memory_cell[j][i].scale_x .. "\n")
+      io.write(memory_cell[j][i].scale_y .. "\n")
     end
   end
   io.close(file)
@@ -1043,6 +1087,9 @@ function loadstate()
           memory_cell[j][i].root = tonumber(io.read())
           memory_cell[j][i].root_x = tonumber(io.read())
           memory_cell[j][i].root_y = tonumber(io.read())
+          memory_cell[j][i].scale = tonumber(io.read())
+          memory_cell[j][i].scale_x = tonumber(io.read())
+          memory_cell[j][i].scale_y = tonumber(io.read())
         end
       end
     else
