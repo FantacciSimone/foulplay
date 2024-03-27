@@ -137,6 +137,7 @@ end
 function clock.transport.stop()
   clock.cancel(clock_id)
   reset_pattern()
+  stopped = 1
 end
 
 
@@ -164,9 +165,6 @@ local blink = false
 local copy_source_x = -1
 local copy_source_y = -1
 
-
-
-
 function simplecopy(obj)
   if type(obj) ~= 'table' then return obj end
   local res = {}
@@ -175,7 +173,6 @@ function simplecopy(obj)
   end
   return res
 end
-
 
 local memory_cell = {}
 for j = 1,25 do
@@ -207,7 +204,6 @@ local function gettrack( cell , tracknum )
   return memory_cell[cell][tracknum]
 end
 
-
 local function cellfromgrid( x , y )
     return (((y - 1) * 5) + (x -4)) + 1
 end
@@ -235,7 +231,16 @@ local function scalefromgrid( i, x , y )
             _pos = _pos - (6*(y-1)) + 6 
         end
     end
-    params:set(i.."_the_scale", _pos)
+    if params:get(i.."_use_scale") == 2 then
+        if params:get(i.."_the_scale") == _pos then
+            params:set(i.."_use_scale", 1)
+        else
+            params:set(i.."_the_scale", _pos)
+        end
+    else
+        params:set(i.."_use_scale", 2)
+        params:set(i.."_the_scale", _pos)
+    end
     return _pos
 end
 
@@ -252,7 +257,6 @@ local function rotate_pattern(t, rot, n, r)
   return r
 end
 
-
 local function reer(i)
   if gettrack(current_mem_cell,i).k == 0 then
     for n=1,32 do gettrack(current_mem_cell,i).s[n] = false end
@@ -261,10 +265,11 @@ local function reer(i)
   end
 end
 
-
 local function send_engine_trig(i)
-    track_trig[i] = 1
-    engine.trig(i-1)
+    if params:get(i .. "_send_ack") == 2 then
+        track_trig[i] = 1
+        engine.trig(i-1)
+    end
 end
 
 local function send_crow(i,_note_playing)
@@ -284,14 +289,14 @@ end
 
 local function send_jf_note(i,_note_playing)
     if params:get(i .. "_send_jf") == 2 then
-	    crow.ii.jf.play_note(_note_playing - 60 / 12, 5) -- TODO 5v -> 9v or add param?
+	    crow.ii.jf.play_note((_note_playing - 60) / 12, 5) -- TODO 5v -> 9v or add param?
 	    track_trig[i] = 3
     end
 end
 
 local function send_midi_note_on(i,_note_playing)
     if params:get(i .. "_midi_send") == 2 then
-        midi_device[params:get(i.."_midi_target")]:note_on(_note_playing, 100, params:get(i.."_midi_chan"))
+        midi_device[params:get(i.."_midi_target")]:note_on(_note_playing, params:get(i.."_midi_vel"), params:get(i.."_midi_chan"))
         --print("MIDI NOTE PLAY | ".._note_playing)
         note_off_queue[i] = 1
         track_trig[i] = 4
@@ -300,16 +305,15 @@ end
 
 local function send_midi_note_off(i)
   if note_off_queue[i] == 1 then
-    midi_device[params:get(i.."_midi_target")]:note_off(params:get(i.."_root_note"), 100, params:get(i.."_midi_chan"))
+    midi_device[params:get(i.."_midi_target")]:note_off(params:get(i.."_root_note"), 0, params:get(i.."_midi_chan"))
     note_off_queue[i] = 0
   end
 end
 
-
 local function send_note(i,t)
     
     send_engine_trig(i)
-    
+
     _note_playing = gettrack(current_mem_cell,i).root
     if params:get(i.."_use_scale") == 2 then
         if params:get(i.."_rnd_scale_note") == 2 then 
@@ -412,9 +416,11 @@ function init()
   screen.line_width(1)
   params:add_separator('tracks')
   for i = 1, 8 do
-    params:add_group("track " .. i, 34)
-    
-    params:add_number(i.."_root_note", i..": root note", 0, 127, note_root, note_formatter)
+    params:add_group("track " .. i, 38)
+    params:add_separator('root')
+    params:add_number(i.."_root_note", i..": note", 0, 127, note_root, note_formatter)
+
+    params:add_separator('scale')
     params:add_option(i.."_use_scale", i..": use scale", {"no", "yes"}, 1)
     params:add_option(i.."_the_scale", i..": scale", scale_names, 1)
     params:add_option(i.."_rnd_scale_note", i..": randomize note", {"no", "yes"}, 1)
@@ -423,12 +429,14 @@ function init()
     params:add_option(i.."_midi_send", i..": send", {"no", "yes"}, 1)
     params:add_option(i.."_midi_target", i..": device", midi_device_names, 1)
     params:add_number(i.."_midi_chan", i..": channel", 1, 16, 1)
+    params:add_number(i.."_midi_vel", i..": velocity", 0, 127, 100)
     
     params:add_separator('crow | jf')
+    params:add_option(i.."_send_crow", i ..": send crow", {"no", "cv/gate 1+2", "cv/gate 3+4", "trig 1", "trig t2", "trig t3", "trig t4"}, 1)
     params:add_option(i.."_send_jf", i..": send jf", {"no", "yes"}, 1)
-    params:add_option(i.."_send_crow", i ..": send crow", {"no", "1+2", "3+4", "t1", "t2", "t3", "t4"}, 1)
 
     params:add_separator('engine')
+    params:add_option(i.."_send_ack", i..": send", {"no", "yes"}, 1)
     ack.add_channel_params(i)
     
   end
@@ -551,30 +559,45 @@ function enc(n,d)
     elseif n==3 then
       params:delta("clock_tempo", d)
     end
+  
   -- track edit view
-  elseif view==1  and page==0 then
-    -- only show the engine edit options if midi note send is off
-    if params:get(track_edit.."_midi_send") == 1 then
-    -- per track volume control
-      if n==1 then
-        params:delta(track_edit .. "_vol", d)
-      elseif n==2 then
-        params:delta(track_edit .. "_vol_env_atk", d)
-      elseif n==3 then
-        params:delta(track_edit .. "_vol_env_rel", d)
-      end
-    -- if send midi is on
-    else
-      -- encoder 1 sets midi channel, 2 selects a note to send, 3 sets scale
-      if n==1 then
-        params:delta(track_edit .. "_root_chan", d)
-      elseif n==2 then
-        params:delta(track_edit .. "_root_note", d)
-      elseif n==3 then
-        params:delta(track_edit .. "_root_scale", d)
-      end
+  elseif view==1 and page==0 then
+    if n==1 then
+      params:delta(track_edit .. "_root_note", d)
+    elseif n==2 then
+      --params:delta(track_edit .. "_", d)
+    elseif n==3 then
+      --params:delta(track_edit .. "_", d)
     end
+    
   elseif view==1 and page==1 then
+    if n==1 then
+      params:delta(track_edit .. "_midi_send", d)
+    elseif n==2 then
+      params:delta(track_edit .. "_send_crow", d)
+    elseif n==3 then
+      params:delta(track_edit .. "_send_jf", d)
+    end
+
+  elseif view==1 and page==2 then
+    if n==1 then
+      params:delta(track_edit .. "_midi_target", d)
+    elseif n==2 then
+      params:delta(track_edit .. "_midi_chan", d)
+    elseif n==3 then
+      params:delta(track_edit .. "_midi_vel", d)
+    end
+
+  elseif view==1 and page==3 then
+    if n==1 then
+      params:delta(track_edit .. "_use_scale", d)
+    elseif n==2 then
+      params:delta(track_edit .. "_the_scale", d)
+    elseif n==3 then
+      params:delta(track_edit .. "_rnd_scale_note", d)
+    end
+
+  elseif view==1 and page==4 then
     -- trigger logic and probability settings
     if n==1 then
       gettrack(current_mem_cell,track_edit).trig_logic = util.clamp(d + gettrack(current_mem_cell,track_edit).trig_logic, 0, 5)
@@ -583,8 +606,18 @@ function enc(n,d)
     elseif n==3 then
       gettrack(current_mem_cell,track_edit).prob = util.clamp(d + gettrack(current_mem_cell,track_edit).prob, 1, 100)
     end
-
-  elseif view==1 and page==2 then
+    
+  elseif view==1 and page==6 then
+    -- per track volume control
+    if n==1 then
+      params:delta(track_edit .. "_vol", d)
+    elseif n==2 then
+      params:delta(track_edit .. "_vol_env_atk", d)
+    elseif n==3 then
+      params:delta(track_edit .. "_vol_env_rel", d)
+    end
+  
+  elseif view==1 and page==7 then
     -- sample playback settings
     if n==1 then
       params:delta(track_edit .. "_speed", d)
@@ -594,7 +627,7 @@ function enc(n,d)
       params:delta(track_edit .. "_end_pos", d)
     end
 
-  elseif view==1 and page==3 then
+  elseif view==1 and page==8 then
     -- filter and fx sends
     if n==1 then
       params:delta(track_edit .. "_filter_cutoff", d)
@@ -603,6 +636,8 @@ function enc(n,d)
     elseif n==3 then
       params:delta(track_edit .. "_reverb_send", d)
     end
+
+
   -- HOME
   -- choose focused track, track fill, and track length
   elseif n==1 and d==1 then
@@ -629,97 +664,155 @@ function redraw()
   screen.aa(0)
   screen.clear()
   
-  if view==0 and alt==0 then
-
-    if draw_cycle > 0 then
-      draw_cycle = draw_cycle + 1
-      screen.move(70,3*7.70)
-      screen.text_center("Track #"..draw_cycle_i)
-      screen.move(70,4*7.70)
-      screen.text_center(MusicUtil.SCALES[params:get(track_edit .. "_the_scale")].name)
-    else
-
-        for i=1, 8 do
+    if view==0 then
+        screen.level(15)
+        if draw_cycle > 0 then
           
-          screen.level((i == track_edit) and 15 or 4)
-          if gettrack(current_mem_cell, i).mute == 1 then
-           screen.move(12,i*7.70)
-           screen.text_center("m")
+          -- overlay action
+          if draw_cycle >= 1 and draw_cycle < 10  then
+            --scale select
+            draw_cycle = draw_cycle + 1
+            screen.move(70,3*7.70)
+            screen.text_center("Track #"..draw_cycle_i)
+            screen.move(70,4*7.70)
+            screen.text_center(MusicUtil.SCALES[params:get(track_edit .. "_the_scale")].name)
+            screen.move(70,5*7.70)
+            screen.text_center((params:get(track_edit.."_use_scale") == 2 and "ON" or "OFF"))
+          
+          elseif draw_cycle >= 10 and draw_cycle < 20  then
+            --copy mode
+            draw_cycle = draw_cycle + 1
+            screen.move(70,4*7.70)
+            screen.text_center("COPY")
+            
+            --- TODO
+            --if copy_mode then
+            --    screen.move(70,5*7.70)
+            --   screen.text_center(copy_source_x.."x"..copy_source_y)
+            --end  
           end
     
-          screen.move(4, i*7.70)
-          screen.text_center(gettrack(current_mem_cell,i).k)
-    
-          screen.move(25, i*7.70)
-          if gettrack(current_mem_cell,i).s[gettrack(current_mem_cell,i).pos] then
-            screen.text_center(MusicUtil.note_num_to_name(gettrack(current_mem_cell,i).last_note, true))
-          end
-    
-          screen.move(38,i*7.70)
-          screen.text_center(gettrack(current_mem_cell,i).n)
-          
-          screen.move(119,i*7.70)
-          screen.text_center(MusicUtil.note_num_to_name(gettrack(current_mem_cell,i).root, true))
-          
-          for x=1,gettrack(current_mem_cell,i).n do
-            screen.level(gettrack(current_mem_cell,i).pos==x and 15 or 2)
-            screen.move(x*2 + 45, i*7.70)
-            if gettrack(current_mem_cell,i).s[x] then
-              --l = (1/gettrack(current_mem_cell,i).n)*x*4          scale effect todo?
-              screen.line_rel(0,-6)
-            else
-              screen.line_rel(0,-1)
-            end
-            screen.stroke()
-          end
-        end
-      
-    end  
-    
-    if draw_cycle == 5 or stopped == 1 then
-        draw_cycle = 0
-        draw_cycle_i = 0
-    end 
-
-  elseif view==0 and alt==1 then
-    screen.level(4)
-    screen.move(0, 8 + 11)
-    screen.text("vol")
-    screen.move(0, 16 + 11)
-    screen.text(string.format("%.1f", params:get("output_level")))
-    screen.move(0, 21 + 11)
-    screen.line(20, 21 + 11)
-    screen.move(0, 30 + 11)
-    screen.text("bpm")
-    screen.move(0, 40 + 11)
-    screen.text(string.format("%.1f", clock.get_tempo()))
-    if gettrack(current_mem_cell, track_edit).mute == 1 then
-      screen.font_face(25)
-      screen.font_size(6)
-      screen.move(0, 60)
-      screen.text("muted")
-      screen.font_face(1)
-      screen.font_size(8)
-    end
-
-    for i=1,8 do
-      screen.level((i == track_edit) and 15 or 4)
-      screen.move(25, i*7.70)
-      screen.text_center(gettrack(current_mem_cell, i).rotation)
-      for x=1,gettrack(current_mem_cell,i).n do
-        screen.level(gettrack(current_mem_cell,i).pos==x and 15 or 2)
-        screen.move(x*3 + 32, i*7.70)
-        if gettrack(current_mem_cell,i).s[x] then
-          screen.line_rel(0,-6)
         else
-          screen.line_rel(0,-2)
+            
+            
+            if alt==1 then
+                -- alt redraw
+                
+                --main vol
+                screen.move(112, 8 + 11)
+                screen.text("vol")
+                screen.move(112, 16 + 11)
+                screen.text(string.format("%.1f", params:get("output_level")))
+                
+                --main bpm
+                screen.move(112, 30 + 11)
+                screen.text("bpm")
+                screen.move(112, 40 + 11)
+                screen.text(string.format("%.1f", clock.get_tempo()))
+                
+                for i=1,8 do
+                  --step rotation
+                  screen.level((i == track_edit) and 15 or 4)
+                  screen.move(4, i*7.70)
+                  screen.text_center(gettrack(current_mem_cell, i).rotation)
+                end
+            else
+    
+                -- default redraw
+                for i=1, 8 do
+                  --active step
+                  screen.move(4, i*7.70)
+                  screen.text_center(gettrack(current_mem_cell,i).k)
+                  
+                  --root note
+                  screen.move(119,i*7.70)
+                  screen.text_center(MusicUtil.note_num_to_name(gettrack(current_mem_cell,i).root, true))
+    
+            end
+            
         end
-        screen.stroke()
-      end
-    end
+            -- common redraw
+            for i=1,8 do
+                
+                -- mute and scale
+                screen.level((i == track_edit) and 15 or 4)
+                  if gettrack(current_mem_cell, i).mute == 1 then
+                   screen.move(12,i*7.70)
+                   screen.text_center("m")
+                  else
+                   if params:get(i.."_use_scale") == 2 then
+                    if params:get(i.."_rnd_scale_note") == 2 then
+                        screen.move(11,i*7.70)
+                        screen.line_rel(0,-1-(math.random(5)))
+                        screen.move(12,i*7.70)
+                        screen.line_rel(0,-1-(math.random(5)))
+                        screen.move(13,i*7.70)
+                        screen.line_rel(0,-1-(math.random(5)))
+                        screen.move(14,i*7.70)
+                        screen.line_rel(0,-1-(math.random(5)))
+                        screen.move(15,i*7.70)
+                        screen.line_rel(0,-1-(math.random(5)))
+                    else
+                        screen.move(11,i*7.70)
+                        screen.line_rel(0,-1)
+                        screen.move(12,i*7.70)
+                        screen.line_rel(0,-2)
+                        screen.move(13,i*7.70)
+                        screen.line_rel(0,-3)
+                        screen.move(14,i*7.70)
+                        screen.line_rel(0,-4)
+                        screen.move(15,i*7.70)
+                        screen.line_rel(0,-5)
+                    end
+                   else
+                    screen.move(11,i*7.70-3)
+                    screen.line_rel(0,1)
+                    screen.move(12,i*7.70-3)
+                    screen.line_rel(0,1)
+                    screen.move(13,i*7.70-3)
+                    screen.line_rel(0,1)
+                    screen.move(14,i*7.70-3)
+                    screen.line_rel(0,1)
+                    screen.move(15,i*7.70-3)
+                    screen.line_rel(0,1)
+                   end
+                  end
+                
+                --play note
+                  if track_trig[i] > 1 then
+                      screen.move(25, i*7.70)
+                      if gettrack(current_mem_cell,i).s[gettrack(current_mem_cell,i).pos] then
+                        screen.text_center(MusicUtil.note_num_to_name(gettrack(current_mem_cell,i).last_note, true))
+                      end
+                  end
+        
+                --track lenght
+                screen.move(38,i*7.70)
+                screen.text_center(gettrack(current_mem_cell,i).n)
+                
+                
+                -- grid
+                for x=1,gettrack(current_mem_cell,i).n do
+                    screen.level(gettrack(current_mem_cell,i).pos==x and 15 or 2)
+                    screen.move(x*2 + 45, i*7.70)
+                    if gettrack(current_mem_cell,i).s[x] then
+                      screen.line_rel(0,-6)
+                    else
+                      screen.line_rel(0,-1)
+                    end
+                    screen.stroke()
+                  end
+            end
 
-  elseif view==1 and page==0 then
-    if params:get(track_edit.."_midi_send") == 1 then
+        end  
+        
+        --overlay cycle reset count
+        if draw_cycle == 5 or draw_cycle == 15 or stopped == 1 then
+            draw_cycle = 0
+            draw_cycle_i = 0
+        end 
+
+    elseif view==1 and page==0 then
       screen.move(5, 10)
       screen.level(15)
       screen.text("track : " .. track_edit)
@@ -729,12 +822,14 @@ function redraw()
       screen.line(121, 15)
       screen.move(64, 25)
       screen.level(4)
-      screen.text_center("1. vol : " .. string.format("%.1f", params:get(track_edit .. "_vol")))
+      _root_note = params:get(track_edit .. "_root_note")
+      screen.text_center("1. root note : " .. _root_note .." ["..MusicUtil.note_num_to_name(_root_note, true).."]")
       screen.move(64, 35)
-      screen.text_center("2. envelope attack : " .. params:get(track_edit .. "_vol_env_atk"))
+	  --screen.text_center("2. vol : " .. params:get(track_edit .. "_midi_chan"))
       screen.move(64, 45)
-      screen.text_center("3. envelope release : " .. params:get(track_edit .. "_vol_env_rel"))
-    else
+      --screen.text_center("3. bpm : " .. params:get(track_edit .. "_midi_vel"))
+
+    elseif view==1 and page==1 then
       screen.move(5, 10)
       screen.level(15)
       screen.text("track : " .. track_edit)
@@ -744,17 +839,61 @@ function redraw()
       screen.line(121, 15)
       screen.move(64, 25)
       screen.level(4)
-      screen.text_center("1. midi channel : " .. params:get(track_edit .. "_midi_chan"))
+      screen.text_center("1. midi : " .. (params:get(track_edit .. "_midi_send") == 2 and "yes" or "no"))
       screen.move(64, 35)
-	  _root_note = params:get(track_edit .. "_root_note")
-      screen.text_center("2. midi note : " .. _root_note .." ["..MusicUtil.note_num_to_name(_root_note, true).."]")
-      if params:get(track_edit .."_use_scale") == 2 then
-        screen.move(64, 45)
-        screen.text_center("3. midi scale : " .. MusicUtil.SCALES[params:get(track_edit .. "_the_scale")].name)
+      local _send_crow = ""
+      if params:get(track_edit .. "_send_crow") == 1 then
+          _send_crow = "no"    
+      elseif params:get(track_edit .. "_send_crow") == 2 then
+          _send_crow = "cv/gate 1+2"
+      elseif params:get(track_edit .. "_send_crow") == 3 then
+          _send_crow = "cv/gate 3+4"
+      elseif params:get(track_edit .. "_send_crow") == 4 then
+          _send_crow = "trig 1"
+      elseif params:get(track_edit .. "_send_crow") == 5 then
+          _send_crow = "trig 2"
+      elseif params:get(track_edit .. "_send_crow") == 6 then
+          _send_crow = "trig 3"
+      elseif params:get(track_edit .. "_send_crow") == 7 then
+          _send_crow = "trig 4"
       end
-    end
+      screen.text_center("2. crow : " .. _send_crow)
+      screen.move(64, 45)
+      screen.text_center("3. jf : " .. (params:get(track_edit .. "_send_jf") == 2 and "yes" or "no"))
 
-  elseif view==1 and page==1 then
+    elseif view==1 and page==2 then
+      screen.move(5, 10)
+      screen.level(15)
+      screen.text("track : " .. track_edit)
+      screen.move(120, 10)
+      screen.text_right("page " .. page + 1)
+      screen.move(5, 15)
+      screen.line(121, 15)
+      screen.move(64, 25)
+      screen.level(4)
+      screen.text_center("1. midi device : " .. midi_device[params:get(track_edit .. "_midi_target")].name)
+      screen.move(64, 35)
+	  screen.text_center("2. midi channel : " .. params:get(track_edit .. "_midi_chan"))
+      screen.move(64, 45)
+      screen.text_center("3. midi velocity : " .. params:get(track_edit .. "_midi_vel"))
+
+   elseif view==1 and page==3 then
+      screen.move(5, 10)
+      screen.level(15)
+      screen.text("track : " .. track_edit)
+      screen.move(120, 10)
+      screen.text_right("page " .. page + 1)
+      screen.move(5, 15)
+      screen.line(121, 15)
+      screen.move(64, 25)
+      screen.level(4)
+      screen.text_center("1. use scale : " .. (params:get(track_edit .. "_use_scale") == 2 and "yes" or "no"))
+      screen.move(64, 35)
+	  screen.text_center("2. scale : " .. MusicUtil.SCALES[params:get(track_edit .. "_the_scale")].name)
+      screen.move(64, 45)
+      screen.text_center("3. randomize note : " .. (params:get(track_edit .. "_rnd_scale_note") == 2 and "yes" or "no"))
+
+  elseif view==1 and page==4 then
     screen.move(5, 10)
     screen.level(15)
     screen.text("track : " .. track_edit)
@@ -794,12 +933,28 @@ function redraw()
     screen.move(64, 45)
     screen.text_center("3. trig probability : " .. gettrack(current_mem_cell,track_edit).prob .. "%")
 
-  elseif view==1 and page==2 then
+  elseif view==1 and page==6 then
     screen.move(5, 10)
     screen.level(15)
     screen.text("track : " .. track_edit)
     screen.move(120, 10)
-    screen.text_right("page " .. page + 1)
+    screen.text_right("page " .. page)
+    screen.move(5, 15)
+    screen.line(121, 15)
+    screen.move(64, 25)
+    screen.level(4)
+    screen.text_center("1. vol : " .. string.format("%.1f", params:get(track_edit .. "_vol")))
+    screen.move(64, 35)
+    screen.text_center("2. envelope attack : " .. params:get(track_edit .. "_vol_env_atk"))
+    screen.move(64, 45)
+    screen.text_center("3. envelope release : " .. params:get(track_edit .. "_vol_env_rel"))
+
+  elseif view==1 and page==7 then
+    screen.move(5, 10)
+    screen.level(15)
+    screen.text("track : " .. track_edit)
+    screen.move(120, 10)
+    screen.text_right("page " .. page)
     screen.move(5, 15)
     screen.line(121, 15)
     screen.move(64, 25)
@@ -810,12 +965,12 @@ function redraw()
     screen.move(64, 45)
     screen.text_center("3. end pos : " .. params:get(track_edit .. "_end_pos"))
 
-  elseif view==1 and page==3 then
+  elseif view==1 and page==8 then
     screen.move(5, 10)
     screen.level(15)
     screen.text("track : " .. track_edit)
     screen.move(120, 10)
-    screen.text_right("page " .. page + 1)
+    screen.text_right("page " .. page)
     screen.move(5, 15)
     screen.line(121, 15)
     screen.level(4)
@@ -830,13 +985,14 @@ function redraw()
   screen.update()
 end
  
+ 
 -- grid stuff - junklight
-
 function g.key(x, y, state)
   -- use first column to switch track edit
   if x == 1 then
     track_edit = y
   end
+  
   -- second column provides mutes
   if x == 2 and state == 1 then
     if gettrack(current_mem_cell, y).mute == 0 then
@@ -845,15 +1001,27 @@ function g.key(x, y, state)
       gettrack(current_mem_cell, y).mute = 0
     end
   end
-  -- x 4-6, are used to open track parameters pages
-  if y == 8 and x >= 4 and x <= 7 and state == 1 then
+  
+  -- third column provides random note on scale
+  if x == 3 and state == 1 then
+    
+    if params:get(y.."_rnd_scale_note") == 1 then
+      params:set(y.."_rnd_scale_note",2)
+    elseif params:get(y.."_rnd_scale_note") == 2 then
+      params:set(y.."_rnd_scale_note",1)
+    end
+  end
+  
+  -- y 7-8 and x 4-8, are used to open track parameters 10 pages
+  if y >= 7 and y <= 8 and x >= 4 and x <= 8 and state == 1 then
     view = 1
-    page = x - 4
+    page = x - 4 + (6 * (y - 7))
   else
     view = 0
   end
+  
   -- start and stop button.
-  if x == 4 and y == 7 and state == 1 then
+  if x == 4 and y == 6 and state == 1 then
     if stopped == 1 then
       stopped = 0
       clock_id = clock.run(pulse)
@@ -862,19 +1030,22 @@ function g.key(x, y, state)
       clock.cancel(clock_id)
     end
   end
+  
   -- reset button
-  if x == 5 and y == 7 and state == 1 then
+  if x == 5 and y == 6 and state == 1 then
     reset_pattern()
     if stopped == 1 then
       step()
     end
   end
+  
   -- set pset load button
-  if x == 8 and y == 7 and state == 1 then
+  if x == 7 and y == 6 and state == 1 then
     pset_load_mode = true
-  elseif x == 8 and y == 7 and state == 0 then
+  elseif x == 7 and y == 6 and state == 0 then
     pset_load_mode = false
   end
+  
   -- load pset 1-25
   if pset_load_mode then
     if y >= 1 and y <= 5 and x >= 4 and x <= 8 and state == 1 then
@@ -888,16 +1059,19 @@ function g.key(x, y, state)
       end
     end
   end
+  
   -- copy button
-  if x == 8 and y==8 and state == 1 then
+  if x == 8 and y==6 and state == 1 then
     copy_mode = true
     copy_source_x = -1
     copy_source_y = -1
-  elseif x == 8 and y==8 and state == 0 then
+    draw_cycle = 10
+  elseif x == 8 and y==6 and state == 0 then
     copy_mode = false
     copy_source_x = -1
     copy_source_y = -1
   end
+  
   -- memory cells
   -- switches on grid down
   if not copy_mode and not pset_load_mode then
@@ -927,7 +1101,7 @@ function g.key(x, y, state)
     end
   end
   
-  -- play cells
+  -- root note cells
   -- switches on grid down
   if not copy_mode and not pset_load_mode then
     if y >= 1 and y <= 8 and x >= 9 and x <= 16 and state == 1 then
@@ -954,16 +1128,25 @@ function grid_redraw()
     return
   end
   g:all(0)
+
   -- highlight current track
   g:led(1, track_edit, 15)
+
   -- track edit page buttons
-  for page = 0, 3 do
+  for page = 0, 4 do
+      g:led(page + 4, 7, 3)
       g:led(page + 4, 8, 3)
   end
+
   -- highlight page if open
   if view == 1 then
-    g:led(page + 4, 8, 14)
+    if page <=5 then
+        g:led(page + 4, 7, 14)
+    else
+        g:led(page + 4 - 6, 8, 14)
+    end
   end
+
   -- mutes - bright for on, dim for off
   for i = 1,8 do
     if gettrack(current_mem_cell, i).mute == 1 then
@@ -988,6 +1171,7 @@ function grid_redraw()
       g:led(x, y, 3)
     end
   end
+
   -- highlight active cell
   g:led(current_mem_cell_x, current_mem_cell_y, 15)
   if copy_mode then
@@ -1000,27 +1184,31 @@ function grid_redraw()
       end
     end
   end
+
   -- start/stop
   if stopped == 0 then
-    g:led(4, 7, 15)
+    g:led(4, 6, 15)
   elseif stopped == 1 then
     if blink then
-      g:led(4, 7, 4)
+      g:led(4, 6, 4)
     else
-      g:led(4, 7, 12)
+      g:led(4, 6, 12)
     end
   end
+
   -- reset button
-  g:led(5, 7, 3)
+  g:led(5, 6, 3)
+
   -- load pset button
   if pset_load_mode then
-    g:led(8, 7, 12)
-  else g:led(8, 7, 3) end
+    g:led(7, 6, 12)
+  else g:led(7, 6, 3) end
+
   -- copy button
   if copy_mode  then
-    g:led(8, 8, 14)
+    g:led(8, 6, 14)
   else
-    g:led(8, 8, 3)
+    g:led(8, 6, 3)
   end
   
   -- root note cells
@@ -1039,7 +1227,7 @@ function grid_redraw()
   g:led(gettrack(current_mem_cell, track_edit).root_x+9, gettrack(current_mem_cell, track_edit).root_y+1, 15) 
 
   -- highlight current track scale cell
-  g:led(gettrack(current_mem_cell, track_edit).scale_x+8, gettrack(current_mem_cell, track_edit).scale_y, 15) 
+  g:led(gettrack(current_mem_cell, track_edit).scale_x+8, gettrack(current_mem_cell, track_edit).scale_y, (params:get(track_edit.."_use_scale") == 2) and 15 or 4) 
 
   g:refresh()
 end
@@ -1068,6 +1256,7 @@ function savestate()
   end
   io.close(file)
 end
+
 
 function loadstate()
   local file = io.open(_path.data .. "foulplay/foulplay-pattern.data", "r")
