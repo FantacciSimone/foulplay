@@ -116,6 +116,7 @@ local track_edit = 1
 local stopped = 1
 local pset_load_mode = false
 local current_pset = 0
+local song_mode = false
 
 local note_root = 60
 local scale_notes = {}
@@ -209,7 +210,7 @@ local function gettrack( cell , tracknum )
 end
 
 local function cellfromgrid( x , y )
-    return (((y - 1) * 5) + (x -4)) + 1
+    return (((y - 1) * 5) + (x - 4)) + 1
 end
 
 local function notefromgrid( i, x , y )
@@ -496,28 +497,29 @@ function step()
   end
   
   -- song mode
-  if memory_cell[current_mem_cell].n > 0 then
-      
-      if gettrack(current_mem_cell,1).pos == gettrack(current_mem_cell,1).n then
-        --print("< " ..  memory_cell[current_mem_cell].s)
-        memory_cell[current_mem_cell].s = memory_cell[current_mem_cell].s + 1
-        
-        if memory_cell[current_mem_cell].s == memory_cell[current_mem_cell].n + 1  then
-            if memory_cell[current_mem_cell+1].n > 0 then
-               current_mem_cell = current_mem_cell+1 
-            else
-               current_mem_cell = 1
+  if song_mode == true then
+      if memory_cell[current_mem_cell].n > 0 then
+          if gettrack(current_mem_cell,1).pos == gettrack(current_mem_cell,1).n then  --track 1 rule the loop lenght
+            --next loop
+            memory_cell[current_mem_cell].s = memory_cell[current_mem_cell].s + 1
+            if memory_cell[current_mem_cell].s == memory_cell[current_mem_cell].n + 1  then
+                if memory_cell[current_mem_cell+1].n > 0 then
+                   --next part
+                   current_mem_cell = current_mem_cell+1
+                   current_mem_cell_x = (current_mem_cell % 5) + 3
+                   current_mem_cell_y = (math.floor(current_mem_cell / 5)) + 1
+                else
+                   --end song
+                   current_mem_cell = 1
+                   current_mem_cell_x = 4
+                   current_mem_cell_y = 1
+                end
+                memory_cell[current_mem_cell].s = 1
             end
-            memory_cell[current_mem_cell].s = 1
-            --print("P_" .. current_mem_cell)
-        end
-      else
-        -- percentuale avanzamento parte
-        --print((memory_cell[current_mem_cell].s / memory_cell[current_mem_cell].n) * 100)
+          end
       end
-
   end
-
+  
   trig()
   redraw()
 end
@@ -1168,6 +1170,18 @@ function g.key(x, y, state)
     if stopped == 1 then
       step()
     end
+    if song_mode == true then
+      memory_cell[current_mem_cell].s = 1
+    end
+  end
+  
+  -- song mode button
+  if x == 6 and y == 6 and state == 1 then
+    if song_mode == true then
+      song_mode = false
+    else
+      song_mode = true
+    end
   end
   
   -- set pset load button
@@ -1318,17 +1332,28 @@ function grid_redraw()
 
   -- start/stop
   if stopped == 0 then
-    g:led(4, 6, 15)
+    g:led(4, 6, 12)
   elseif stopped == 1 then
     if blink then
-      g:led(4, 6, 4)
+      g:led(4, 6, 8)
     else
-      g:led(4, 6, 12)
+      g:led(4, 6, 15)
     end
   end
-
+  
+  -- song mode
+  if song_mode == true then
+    g:led(6, 6, 12)
+  else
+    if blink then
+      g:led(6, 6, 8)
+    else
+      g:led(6, 6, 15)
+    end
+  end
+  
   -- reset button
-  g:led(5, 6, 3)
+  g:led(5, 6, 8)
 
   -- load pset button
   if pset_load_mode then
